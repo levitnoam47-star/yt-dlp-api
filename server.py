@@ -37,10 +37,10 @@ def get_direct_url(video_url):
 
 def get_filter_complex(corner):
     face_crops = {
-        "bottom_left":  "crop=iw*0.27:ih*0.30:0:ih*0.55",
-        "bottom_right": "crop=iw*0.27:ih*0.30:iw*0.73:ih*0.55",
-        "top_left":     "crop=iw*0.27:ih*0.30:0:0",
-        "top_right":    "crop=iw*0.27:ih*0.30:iw*0.73:0",
+        "bottom_left":  "crop=iw*0.15:ih*0.18:0:ih*0.68",
+        "bottom_right": "crop=iw*0.15:ih*0.18:iw*0.85:ih*0.68",
+        "top_left":     "crop=iw*0.15:ih*0.18:0:0",
+        "top_right":    "crop=iw*0.15:ih*0.18:iw*0.85:0",
     }
     chart_crops = {
         "bottom_left":  "crop=iw*0.73:ih*0.87:iw*0.25:ih*0.05",
@@ -52,8 +52,8 @@ def get_filter_complex(corner):
     chart_crop = chart_crops.get(corner, chart_crops["bottom_left"])
     return (
         f"[0:v]split=2[v1][v2];"
-        f"[v1]{face_crop},scale=1080:570[face];"
-        f"[v2]{chart_crop},scale=1080:1350[chart];"
+        f"[v1]{face_crop},scale=1080:570:force_original_aspect_ratio=increase,crop=1080:570[face];"
+        f"[v2]{chart_crop},scale=1080:1350:force_original_aspect_ratio=increase,crop=1080:1350[chart];"
         f"[face][chart]vstack=inputs=2[out]"
     )
 
