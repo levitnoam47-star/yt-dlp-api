@@ -1,32 +1,6 @@
-from flask import Flask, request, jsonify, Response
-import subprocess, json, os, tempfile, uuid
-
-app = Flask(__name__)
-
-@app.route("/direct-url", methods=["GET"])
-def direct_url():
-    url = request.args.get("url")
-    result = subprocess.run(["yt-dlp", "-f", "best[ext=mp4]", "-g", url], capture_output=True, text=True)
-    return jsonify({"url": result.stdout.strip()})
-
-@app.route("/download", methods=["GET"])
-def download():
-    url = request.args.get("url")
-    result = subprocess.run(["yt-dlp", "-f", "best[ext=mp4]", "-g", url], capture_output=True, text=True)
-    video_url = result.stdout.strip()
-    if not video_url:
-        return jsonify({"error": "Could not get URL"}), 400
-    import requests as req
-    r = req.get(video_url, stream=True)
-    return Response(
-        r.iter_content(chunk_size=8192),
-        content_type="video/mp4",
-        headers={"Content-Length": r.headers.get("Content-Length", "")}
-    )
-
 @app.route("/composite", methods=["GET"])
 def composite():
-    """Create 9:16 composite: facecam on top, chart on bottom"""
+    """Create 9:16 composite: facecam on top, chart on bottom — 1080x1920"""
     url = request.args.get("url")
     start = request.args.get("start", "0")
     duration = request.args.get("duration", "30")
@@ -43,7 +17,6 @@ def composite():
         video_url = direct.stdout.strip()
 
         if not video_url:
-            # Fallback to any mp4
             direct = subprocess.run(
                 ["yt-dlp", "-f", "best[ext=mp4]", "-g", url],
                 capture_output=True, text=True, timeout=60
@@ -51,35 +24,55 @@ def composite():
             video_url = direct.stdout.strip()
 
         if not video_url:
-            return jsonify({
-                "error": "Could not get video URL",
-                "stderr": direct.stderr[-500:] if direct.stderr else ""
-            }), 400
+            return jsonify({"error": "Could not get video URL"}), 400
 
-        # Step 2: Download segment + create composite in ONE ffmpeg pass
+        # Step 2: Download segment + create 1080x1920 composite in ONE ffmpeg pass
+        #
+        # Source layout (16:9 trading stream):
+        # ┌──────────────────────────────┐
+        # │  Toolbar                     │ ← top ~5%
+        # │  ┌────────────────────────┐  │
+        # │  │                        │  │
+        # │  │     CHART AREA         │  │
+        # │  │                        │  │
+        # │  │                        │  │
+        # │  ├──────┐                 │  │
+        # │  │FACE  │                 │  │
+        # │  │CAM   │                 │  │
+        # │  └──────┴─────────────────┘  │
+        # │  Bottom indicators           │ ← bottom ~8%
+        # └──────────────────────────────┘
+        #
+        # Facecam: bottom-left ~25% width, ~30% height
+        # Chart: center area excluding facecam, toolbars, indicators
+        
         ffmpeg_result = subprocess.run([
             "ffmpeg",
             "-ss", str(start),
             "-i", video_url,
             "-t", str(duration),
             "-filter_complex",
-            # Split input into two streams to avoid double decode
+            # Split input once to avoid double decode
             "[0:v]split=2[v1][v2];"
-            # Facecam: crop bottom-left 40% width x 40% height, scale to 720x320
-            "[v1]crop=iw*0.4:ih*0.4:0:ih*0.6,scale=720:320[face];"
-            # Chart: crop right 80% width x 78% height, scale to 720x960
-            "[v2]crop=iw*0.8:ih*0.78:iw*0.15:ih*0.02,scale=720:960[chart];"
-            # Stack vertically = 720x1280
+            # FACECAM: crop bottom-left corner only
+            # crop=width:height:x:y
+            # 25% of width, 28% of height, starting at x=0, y=72% from top
+            "[v1]crop=iw*0.25:ih*0.28:0:ih*0.72,scale=1080:570[face];"
+            # CHART: crop the main chart area
+            # Remove left 25% (facecam), top 5% (toolbar), bottom 8% (indicators)
+            # Take from x=25% of width, y=5% from top, width=73%, height=87%
+            "[v2]crop=iw*0.73:ih*0.87:iw*0.25:ih*0.05,scale=1080:1350[chart];"
+            # Stack vertically = 1080x1920 (9:16)
             "[face][chart]vstack=inputs=2[out]",
             "-map", "[out]",
             "-map", "0:a?",
             "-c:v", "libx264",
             "-preset", "veryfast",
-            "-crf", "26",
+            "-crf", "23",
             "-c:a", "aac",
-            "-b:a", "96k",
+            "-b:a", "128k",
             "-movflags", "+faststart",
-            "-threads", "1",
+            "-threads", "2",
             "-y", output_file
         ], capture_output=True, text=True, timeout=600)
 
@@ -90,7 +83,6 @@ def composite():
                 "returncode": ffmpeg_result.returncode
             }), 500
 
-        # Step 3: Stream the result back
         file_size = os.path.getsize(output_file)
 
         def generate():
@@ -100,7 +92,6 @@ def composite():
                     if not chunk:
                         break
                     yield chunk
-            # Cleanup
             if os.path.exists(output_file):
                 os.remove(output_file)
             if os.path.exists(tmp_dir):
