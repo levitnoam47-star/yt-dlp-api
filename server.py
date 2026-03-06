@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify, Response
-import subprocess, json, os, tempfile, uuid
+import subprocess, json, os, tempfile, uuid, glob
 
 app = Flask(__name__)
 
@@ -36,30 +36,38 @@ def composite():
     output_file = os.path.join(tmp_dir, f"{uuid.uuid4()}.mp4")
     
     try:
-        # Step 1: Download the clip segment with yt-dlp
+        # Step 1: Get direct video URL via yt-dlp
+        direct = subprocess.run(
+            ["yt-dlp", "-f", "best[ext=mp4]", "-g", url],
+            capture_output=True, text=True, timeout=60
+        )
+        video_url = direct.stdout.strip()
+        
+        if not video_url:
+            return jsonify({
+                "error": "Could not get video URL",
+                "stderr": direct.stderr[-500:] if direct.stderr else ""
+            }), 400
+        
+        # Step 2: Download just the segment we need with ffmpeg
         dl_result = subprocess.run([
-            "yt-dlp", "-f", "best[ext=mp4]",
-            "--download-sections", f"*{start}-{int(start)+int(duration)}",
-            "-o", input_file,
-            url
-        ], capture_output=True, text=True, timeout=120)
+            "ffmpeg", "-ss", str(start), "-i", video_url,
+            "-t", str(duration),
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
+            "-c:a", "aac",
+            "-y", input_file
+        ], capture_output=True, text=True, timeout=300)
         
-        if not os.path.exists(input_file):
-            # Fallback: download full and trim with ffmpeg
-            direct = subprocess.run(["yt-dlp", "-f", "best[ext=mp4]", "-g", url], capture_output=True, text=True)
-            video_url = direct.stdout.strip()
-            if not video_url:
-                return jsonify({"error": "Could not get video URL"}), 400
-            
-            subprocess.run([
-                "ffmpeg", "-ss", start, "-i", video_url, "-t", duration,
-                "-c", "copy", input_file
-            ], capture_output=True, timeout=120)
+        if not os.path.exists(input_file) or os.path.getsize(input_file) < 1024:
+            return jsonify({
+                "error": "Failed to download video segment",
+                "stderr": dl_result.stderr[-500:] if dl_result.stderr else "",
+                "stdout": dl_result.stdout[-200:] if dl_result.stdout else ""
+            }), 500
         
-        if not os.path.exists(input_file):
-            return jsonify({"error": "Failed to download video segment"}), 500
+        input_size = os.path.getsize(input_file)
         
-        # Step 2: Create 9:16 composite with ffmpeg
+        # Step 3: Create 9:16 composite with ffmpeg
         # Top: facecam cropped from bottom-left of source (1080x480)
         # Bottom: chart from center-right of source (1080x1440)
         # Total: 1080x1920 (9:16)
@@ -81,30 +89,46 @@ def composite():
             "-b:a", "128k",
             "-movflags", "+faststart",
             "-y", output_file
-        ], capture_output=True, text=True, timeout=300)
+        ], capture_output=True, text=True, timeout=600)
         
-        if not os.path.exists(output_file):
+        if not os.path.exists(output_file) or os.path.getsize(output_file) < 1024:
             return jsonify({
-                "error": "ffmpeg failed",
-                "stderr": ffmpeg_result.stderr[-500:] if ffmpeg_result.stderr else ""
+                "error": "ffmpeg composite failed",
+                "input_size": input_size,
+                "stderr": ffmpeg_result.stderr[-500:] if ffmpeg_result.stderr else "",
+                "returncode": ffmpeg_result.returncode
             }), 500
         
-        # Step 3: Stream the result back
+        # Step 4: Stream the result back
+        file_size = os.path.getsize(output_file)
+        
         def generate():
             with open(output_file, "rb") as f:
-                while chunk := f.read(8192):
+                while True:
+                    chunk = f.read(8192)
+                    if not chunk:
+                        break
                     yield chunk
             # Cleanup
-            os.remove(output_file)
-            os.remove(input_file)
-            os.rmdir(tmp_dir)
+            for f_path in [input_file, output_file]:
+                if os.path.exists(f_path):
+                    os.remove(f_path)
+            if os.path.exists(tmp_dir):
+                os.rmdir(tmp_dir)
         
-        file_size = os.path.getsize(output_file)
         return Response(
             generate(),
             content_type="video/mp4",
             headers={"Content-Length": str(file_size)}
         )
+    except subprocess.TimeoutExpired as e:
+        # Cleanup on timeout
+        for f in [input_file, output_file]:
+            if os.path.exists(f):
+                os.remove(f)
+        if os.path.exists(tmp_dir):
+            os.rmdir(tmp_dir)
+        return jsonify({"error": f"Process timed out: {str(e)}"}), 504
     except Exception as e:
         # Cleanup on error
         for f in [input_file, output_file]:
