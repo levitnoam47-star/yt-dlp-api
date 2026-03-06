@@ -33,26 +33,32 @@ def get_direct_url(video_url):
     for fmt in formats_to_try:
         cmd = [
             "yt-dlp",
-            "--js-runtimes", "node",
+            "--js-runtimes", "deno",
+            "--remote-components", "ejs:github",
+            "--extractor-args", "youtube:player_client=tv,web",
             "-f", fmt,
             "--get-url",
         ] + cookies + [video_url]
 
+        print(f"Trying format: {fmt}")
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
 
         if result.returncode == 0 and result.stdout.strip():
             url = result.stdout.strip().split("\n")[0]
             if url.startswith("http"):
-                print(f"Got URL with format: {fmt}")
+                print(f"Success with format: {fmt}")
                 return url
 
         last_error = result.stderr or ""
+        print(f"Failed format {fmt}: {last_error[-200:]}")
 
         # Retry without cookies if cookie format error
         if "does not look like a Netscape" in last_error:
             cmd_no_cookies = [
                 "yt-dlp",
-                "--js-runtimes", "node",
+                "--js-runtimes", "deno",
+                "--remote-components", "ejs:github",
+                "--extractor-args", "youtube:player_client=tv,web",
                 "-f", fmt,
                 "--get-url",
                 video_url,
@@ -61,7 +67,7 @@ def get_direct_url(video_url):
             if result.returncode == 0 and result.stdout.strip():
                 url = result.stdout.strip().split("\n")[0]
                 if url.startswith("http"):
-                    print(f"Got URL without cookies, format: {fmt}")
+                    print(f"Success without cookies, format: {fmt}")
                     return url
             last_error = result.stderr or ""
 
@@ -93,9 +99,13 @@ def get_filter_complex(corner):
 
 @app.route("/health", methods=["GET"])
 def health():
-    # Quick check that node is available for yt-dlp
-    node_ok = subprocess.run(["node", "--version"], capture_output=True).returncode == 0
-    return jsonify({"status": "ok", "node_available": node_ok})
+    deno_ok = subprocess.run(["deno", "--version"], capture_output=True).returncode == 0
+    yt_dlp_ver = subprocess.run(["yt-dlp", "--version"], capture_output=True, text=True)
+    return jsonify({
+        "status": "ok",
+        "deno_available": deno_ok,
+        "yt_dlp_version": yt_dlp_ver.stdout.strip() if yt_dlp_ver.returncode == 0 else "unknown",
+    })
 
 
 @app.route("/extract-frame", methods=["GET"])
