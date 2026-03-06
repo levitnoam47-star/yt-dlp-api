@@ -2,10 +2,13 @@ FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    nodejs \
-    npm \
     curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Deno (recommended JS runtime for yt-dlp)
+RUN curl -fsSL https://deno.land/install.sh | sh
+ENV DENO_DIR="/root/.deno"
+ENV PATH="${DENO_DIR}/bin:${PATH}"
 
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir flask yt-dlp gunicorn
