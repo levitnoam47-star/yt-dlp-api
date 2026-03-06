@@ -20,19 +20,52 @@ def get_cookies_flag():
 
 
 def get_direct_url(video_url):
-    base_cmd = ["yt-dlp", "-f", "best[ext=mp4]", "--get-url"]
-    yt_result = subprocess.run(
-        base_cmd + get_cookies_flag() + [video_url],
-        capture_output=True, text=True, timeout=60
-    )
-    if yt_result.returncode != 0 and "does not look like a Netscape" in (yt_result.stderr or ""):
-        yt_result = subprocess.run(
-            base_cmd + [video_url],
-            capture_output=True, text=True, timeout=60
-        )
-    if yt_result.returncode != 0:
-        raise Exception(f"yt-dlp failed: {yt_result.stderr[-500:]}")
-    return yt_result.stdout.strip()
+    formats_to_try = [
+        "best[ext=mp4]",
+        "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]",
+        "bestvideo+bestaudio/best",
+        "best",
+    ]
+
+    cookies = get_cookies_flag()
+    last_error = ""
+
+    for fmt in formats_to_try:
+        cmd = [
+            "yt-dlp",
+            "--js-runtimes", "node",
+            "-f", fmt,
+            "--get-url",
+        ] + cookies + [video_url]
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+
+        if result.returncode == 0 and result.stdout.strip():
+            url = result.stdout.strip().split("\n")[0]
+            if url.startswith("http"):
+                print(f"Got URL with format: {fmt}")
+                return url
+
+        last_error = result.stderr or ""
+
+        # Retry without cookies if cookie format error
+        if "does not look like a Netscape" in last_error:
+            cmd_no_cookies = [
+                "yt-dlp",
+                "--js-runtimes", "node",
+                "-f", fmt,
+                "--get-url",
+                video_url,
+            ]
+            result = subprocess.run(cmd_no_cookies, capture_output=True, text=True, timeout=120)
+            if result.returncode == 0 and result.stdout.strip():
+                url = result.stdout.strip().split("\n")[0]
+                if url.startswith("http"):
+                    print(f"Got URL without cookies, format: {fmt}")
+                    return url
+            last_error = result.stderr or ""
+
+    raise Exception(f"yt-dlp failed all formats. Last error: {last_error[-500:]}")
 
 
 def get_filter_complex(corner):
@@ -60,7 +93,9 @@ def get_filter_complex(corner):
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok"})
+    # Quick check that node is available for yt-dlp
+    node_ok = subprocess.run(["node", "--version"], capture_output=True).returncode == 0
+    return jsonify({"status": "ok", "node_available": node_ok})
 
 
 @app.route("/extract-frame", methods=["GET"])
