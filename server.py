@@ -22,6 +22,22 @@ def composite():
     output_id = str(uuid.uuid4())
     output_path = os.path.join(tempfile.gettempdir(), f"{output_id}.mp4")
 
+    # Step 1: Get direct video URL using yt-dlp
+    try:
+        yt_result = subprocess.run(
+            ["yt-dlp", "-f", "best[ext=mp4]", "--get-url", video_url],
+            capture_output=True, text=True, timeout=60
+        )
+        if yt_result.returncode != 0:
+            return jsonify({
+                "error": "yt-dlp failed to get direct URL",
+                "stderr": yt_result.stderr[-500:]
+            }), 500
+        direct_url = yt_result.stdout.strip()
+    except Exception as e:
+        return jsonify({"error": f"yt-dlp error: {str(e)}"}), 500
+
+    # Step 2: FFmpeg with direct URL
     filter_complex = (
         "[0:v]split=2[v1][v2];"
         "[v1]crop=iw*0.25:ih*0.28:0:ih*0.72,scale=1080:570[face];"
@@ -32,7 +48,7 @@ def composite():
     cmd = [
         "ffmpeg", "-y",
         "-ss", str(start),
-        "-i", video_url,
+        "-i", direct_url,
         "-t", str(duration),
         "-filter_complex", filter_complex,
         "-map", "[out]",
