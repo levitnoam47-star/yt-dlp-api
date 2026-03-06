@@ -1,16 +1,17 @@
 FROM python:3.11-slim
-RUN pip install --upgrade yt-dlp
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    nodejs \
+    npm \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir flask gunicorn yt-dlp
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir flask yt-dlp gunicorn
 
 WORKDIR /app
-
-COPY server.py /app/server.py
-COPY cookies.txt /app/cookies.txt
+COPY . .
 
 EXPOSE 8080
 
