@@ -12,7 +12,7 @@ ENV DENO_DIR="/root/.deno"
 ENV PATH="${DENO_DIR}/bin:${PATH}"
 
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir flask yt-dlp gunicorn
+    pip install --no-cache-dir flask yt-dlp gunicorn openai
 
 WORKDIR /app
 COPY . .

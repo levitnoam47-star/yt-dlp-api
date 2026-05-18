@@ -3,6 +3,12 @@ import subprocess
 import os
 import tempfile
 import uuid
+from dataclasses import asdict
+
+from openai import APIError, APITimeoutError
+
+from viral_gen import GenerateRequest, run as viral_gen_run
+from viral_gen.pipeline import InvalidRequest
 
 app = Flask(__name__)
 cookies_path = "/app/cookies.txt"
@@ -204,6 +210,34 @@ def composite():
     finally:
         if os.path.exists(output_path):
             os.remove(output_path)
+
+
+@app.route("/generate-posts", methods=["POST"])
+def generate_posts():
+    body = request.get_json(silent=True) or {}
+    try:
+        req = GenerateRequest(
+            topic=body.get("topic", ""),
+            tone=body.get("tone"),
+            audience=body.get("audience"),
+            format=body.get("format", "single"),
+            model=body.get("model", "claude-sonnet-4-6"),
+            grader_model=body.get("grader_model"),
+            n=int(body.get("n", 12)),
+            top_k=int(body.get("top_k", 5)),
+            weights=body.get("weights"),
+        )
+        ranked = viral_gen_run(req)
+    except InvalidRequest as e:
+        return jsonify({"error": str(e)}), 400
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
+    except APITimeoutError as e:
+        return jsonify({"error": f"LLM timeout: {e}"}), 504
+    except APIError as e:
+        return jsonify({"error": f"LLM error: {e}"}), 502
+
+    return jsonify([asdict(r) for r in ranked])
 
 
 if __name__ == "__main__":
